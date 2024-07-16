@@ -1,0 +1,84 @@
+#!/bin/sh /etc/rc.common
+
+START=99
+STOP=10
+
+INTERNET_CHECK_URL="google.com"
+INTERNET_CHECK_RETRY_INTERVAL=2
+INTERNET_CHECK_MAX_RETRIES=9999
+
+check_service() {
+    if pgrep -f "openclash" >/dev/null || \
+       pgrep -f "neko" >/dev/null || \
+       pgrep -f "passwall" >/dev/null || \
+       pgrep -f "homeproxy" >/dev/null; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+main_function() {
+    while true; do
+        if check_service; then
+            current_time=$(date +"%A %d-%b-%Y %T")
+            echo "$current_time, At least one service is running. Proceeding with internet check." >> /tmp/mahavpn_bot.log
+            check_internet >/dev/null 2>&1 &
+            return $?
+        else
+            current_time=$(date +"%A %d-%b-%Y %T")
+            echo "$current_time, None of the services are running. Sleeping for 5 seconds and retrying..." >> /tmp/mahavpn_bot.log
+            sleep 5 >/dev/null 2>&1 &
+        fi
+    done
+}
+
+start() {
+    main_function >/dev/null 2>&1 &
+    return 0
+}
+
+stop() {
+    kill -9 $(pgrep -f mahavpn_bot) >/dev/null 2>&1
+    > /tmp/mahavpn_bot.log >/dev/null 2>&1
+}
+
+restart() {
+    /etc/init.d/mahavpn_telebot stop >/dev/null 2>&1
+    sleep 1
+    /etc/init.d/mahavpn_telebot start >/dev/null 2>&1
+}
+
+enable() {
+    [ -e /etc/rc.d/S99mahavpn_telebot ] || ln -s /etc/init.d/mahavpn_telebot /etc/rc.d/S99mahavpn_telebot
+}
+
+disable() {
+    stop
+    rm -f /etc/rc.d/S99mahavpn_telebot
+}
+
+check_internet() {
+    local retries=0
+    local timeout=3
+
+    while [ $retries -lt $INTERNET_CHECK_MAX_RETRIES ]; do
+        current_time=$(date +"%A %d-%b-%Y %T")
+        if httping -c 1 -t $timeout $INTERNET_CHECK_URL >> /tmp/mahavpn_bot.log; then
+            echo "$current_time, Internet is available. Starting mahavpn_bot..." >> /tmp/mahavpn_bot.log
+            > /root/.bash_history >/dev/null 2>&1
+            sleep 3
+            kill -9 $(pgrep -f mahavpn_bot) >/dev/null 2>&1
+            cd /etc
+            /usr/bin/python3 -m mahavpn_bot >> /tmp/mahavpn_bot.log 2>&1 &
+            return 0
+        else
+            echo "$current_time, Internet is not available. Retrying in $INTERNET_CHECK_RETRY_INTERVAL seconds..." >> /tmp/mahavpn_bot.log
+            sleep $INTERNET_CHECK_RETRY_INTERVAL
+            retries=$((retries + 1))
+        fi
+    done
+
+    echo "Internet is not available after multiple retries. Exiting." >> /tmp/mahavpn_bot.log
+    return 1
+}
